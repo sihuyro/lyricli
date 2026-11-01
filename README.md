@@ -24,7 +24,15 @@ Di Arch Linux:
 sudo pacman -S rust playerctl curl
 ```
 
-## Instalasi & Konfigurasi PATH
+## Instalasi
+
+### Arch Linux (AUR)
+
+```bash
+yay -S lyricli
+```
+
+### Dari Kode Sumber (Cargo)
 
 Kompilasi dalam mode rilis:
 

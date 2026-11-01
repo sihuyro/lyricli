@@ -1,0 +1,17 @@
+pkgbase = lyricli
+	pkgdesc = Real-time synced Spotify and MPRIS lyrics in the terminal with ASCII typography and album cover art
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/sihuyro/lyricli
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cargo
+	depends = gcc-libs
+	depends = glibc
+	depends = playerctl
+	depends = curl
+	source = lyricli-0.1.0.tar.gz::https://github.com/sihuyro/lyricli/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 10805dd2ce230bde08e0167de46c00f82754c3e8ab3f49106a89524bdb59f0ee
+
+pkgname = lyricli
