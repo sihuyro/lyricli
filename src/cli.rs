@@ -16,7 +16,7 @@ pub struct Cli {
     pub no_cover: bool,
 
     /// Character style for the ASCII album cover (can also be cycled live with 'v')
-    #[arg(short = 'c', long, value_enum, default_value_t = CoverStyle::Braille)]
+    #[arg(short = 'c', long, value_enum, default_value_t = CoverStyle::Halfblock)]
     pub charset: CoverStyle,
 
     /// ASCII typography style for the active lyric line (can also be cycled live with 'f')
@@ -58,6 +58,8 @@ pub struct Cli {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum CoverStyle {
+    #[value(alias = "half-block")]
+    Halfblock,
     Braille,
     Blocks,
     Detailed,
@@ -67,15 +69,17 @@ pub enum CoverStyle {
 impl CoverStyle {
     pub fn next(self) -> Self {
         match self {
+            Self::Halfblock => Self::Braille,
             Self::Braille => Self::Blocks,
             Self::Blocks => Self::Detailed,
             Self::Detailed => Self::Standard,
-            Self::Standard => Self::Braille,
+            Self::Standard => Self::Halfblock,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Halfblock => "halfblock",
             Self::Braille => "braille",
             Self::Blocks => "blocks",
             Self::Detailed => "detailed",

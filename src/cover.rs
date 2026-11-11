@@ -74,6 +74,7 @@ pub fn render_cover_image(img: &RgbImage, cols: u32, style: CoverStyle) -> Ascii
     let grid_h = (grid_w / 2).max(6);
 
     match style {
+        CoverStyle::Halfblock => render_halfblock(img, grid_w, grid_h),
         CoverStyle::Braille => render_braille(img, grid_w, grid_h),
         CoverStyle::Blocks => render_ramp(img, grid_w, grid_h, BLOCKS_RAMP),
         CoverStyle::Detailed => render_ramp(img, grid_w, grid_h, DETAILED_RAMP),
@@ -81,10 +82,53 @@ pub fn render_cover_image(img: &RgbImage, cols: u32, style: CoverStyle) -> Ascii
     }
 }
 
+fn render_halfblock(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
+    let sample_w = grid_w;
+    let sample_h = grid_h * 2;
+    let resized = image::imageops::resize(img, sample_w, sample_h, FilterType::Lanczos3);
+    let raw = resized.as_raw();
+
+    let mut rows = Vec::with_capacity(grid_h as usize);
+    for cy in 0..grid_h {
+        let mut line = String::with_capacity((grid_w * 25) as usize);
+        let mut last_fg: Option<[u8; 3]> = None;
+        let mut last_bg: Option<[u8; 3]> = None;
+
+        let top_y = cy * 2;
+        let bot_y = top_y + 1;
+
+        for cx in 0..grid_w {
+            let top_idx = ((top_y * sample_w + cx) * 3) as usize;
+            let bot_idx = ((bot_y * sample_w + cx) * 3) as usize;
+
+            let fg = [raw[top_idx], raw[top_idx + 1], raw[top_idx + 2]];
+            let bg = [raw[bot_idx], raw[bot_idx + 1], raw[bot_idx + 2]];
+
+            if last_fg != Some(fg) {
+                let _ = write!(line, "\x1b[38;2;{};{};{}m", fg[0], fg[1], fg[2]);
+                last_fg = Some(fg);
+            }
+            if last_bg != Some(bg) {
+                let _ = write!(line, "\x1b[48;2;{};{};{}m", bg[0], bg[1], bg[2]);
+                last_bg = Some(bg);
+            }
+            line.push('▀');
+        }
+        line.push_str("\x1b[0m");
+        rows.push(line);
+    }
+
+    AsciiCover {
+        width: grid_w,
+        height: grid_h,
+        rows,
+    }
+}
+
 fn render_braille(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
     let sample_w = grid_w * 2;
     let sample_h = grid_h * 4;
-    let resized = image::imageops::resize(img, sample_w, sample_h, FilterType::Triangle);
+    let resized = image::imageops::resize(img, sample_w, sample_h, FilterType::Lanczos3);
     let raw = resized.as_raw();
 
     let mut rows = Vec::with_capacity(grid_h as usize);
@@ -147,7 +191,7 @@ fn render_braille(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
 }
 
 fn render_ramp(img: &RgbImage, grid_w: u32, grid_h: u32, ramp: &[char]) -> AsciiCover {
-    let resized = image::imageops::resize(img, grid_w, grid_h, FilterType::Triangle);
+    let resized = image::imageops::resize(img, grid_w, grid_h, FilterType::Lanczos3);
     let raw = resized.as_raw();
     let max_idx = ramp.len().saturating_sub(1);
 
@@ -213,6 +257,7 @@ mod tests {
     fn renders_cover_in_all_styles_with_expected_dimensions() {
         let img = RgbImage::from_pixel(64, 64, Rgb([200, 60, 80]));
         for style in [
+            CoverStyle::Halfblock,
             CoverStyle::Braille,
             CoverStyle::Blocks,
             CoverStyle::Detailed,

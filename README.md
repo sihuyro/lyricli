@@ -8,7 +8,7 @@ Program ini bekerja otomatis tanpa memerlukan API Key atau login akun Spotify.
 
 1. **Deteksi Lagu & Waktu Real-Time**: Membaca metadata lagu yang sedang diputar (`judul`, `artis`, `album`, `durasi`, `posisi detik`, dan `URL cover art`) dari aplikasi Spotify Desktop maupun pemutar MPRIS aktif lainnya.
 2. **Lirik Tersinkronisasi Waktu (LRC)**: Mengambil lirik *timestamp* baris demi baris dari **LRCLIB** dan menyorot baris yang sedang dinyanyikan tepat di tengah layar terminal.
-3. **Cover Art Album versi ASCII TrueColor**: Mengunduh sampul album lagu secara otomatis dan merendernya di samping lirik dengan 4 pilihan gaya (`braille` sub-piksel 2x4, `blocks` `░▒▓█`, `detailed`, dan `standard`).
+3. **Cover Art Album versi TrueColor Beresolusi Tinggi**: Mengunduh sampul album lagu secara otomatis dan merendernya di samping lirik dengan 5 pilihan gaya: `halfblock` (TrueColor fotorealistik 2 piksel/sel karakter menggunakan blok `▀`), `braille` (sub-piksel 2x4), `blocks` (`░▒▓█`), `detailed`, dan `standard`. Resolusi dan ketajaman ditingkatkan menggunakan filter resampling Lanczos3.
 4. **Penyimpanan Cache Lokal**: Menyimpan lirik dan sampul album di `~/.cache/lyricli/` sehingga lagu yang diputar ulang langsung tampil seketika tanpa mengunduh ulang.
 5. **Kontrol Pemutar Langsung dari Terminal**: Jeda/lanjutkan lagu, pindah ke lagu berikutnya/sebelumnya, *seek* maju/mundur 5 detik, atur *offset* sinkronisasi lirik, serta sembunyikan bar petunjuk tombol (`h`) untuk tampilan bersih.
 
@@ -74,7 +74,7 @@ lyricli --track "Amoeba" --artist "Clairo"
 | `p` / `<` | Kembali ke lagu sebelumnya (Previous Track) |
 | `←` / `→` | Mundurkan atau majukan posisi lagu sebanyak 5 detik |
 | `c` | Tampilkan atau sembunyikan Cover Art ASCII |
-| `v` | Ganti gaya karakter Cover Art (`braille`, `blocks`, `detailed`, `standard`) |
+| `v` | Ganti gaya karakter Cover Art (`halfblock`, `braille`, `blocks`, `detailed`, `standard`) |
 | `f` | Ganti gaya tipografi ASCII baris lirik aktif (`block`, `braille`, `banner`) |
 | `t` | Sembunyikan atau tampilkan baris lirik teks biasa di atas/bawah lirik ASCII (default: disembunyikan) |
 | `[` / `]` | Geser waktu sinkronisasi lirik (`-250ms` / `+250ms`) |
@@ -88,7 +88,7 @@ lyricli --track "Amoeba" --artist "Clairo"
 | :--- | :--- | :--- |
 | `-p, --player <NAME>` | Prioritas `spotify` | Nama pemutar MPRIS spesifik yang ingin dipantau. |
 | `--no-cover` | Mati | Menyembunyikan sampul album ASCII saat pertama kali dijalankan. |
-| `-c, --charset <STYLE>` | `braille` | Gaya karakter sampul album: `braille`, `blocks`, `detailed`, `standard`. |
+| `-c, --charset <STYLE>` | `halfblock` | Gaya karakter sampul album: `halfblock`, `braille`, `blocks`, `detailed`, `standard`. |
 | `-l, --lyric-style <STYLE>` | `block` | Gaya huruf ASCII untuk baris lirik aktif: `block`, `braille`, `banner`. |
 | `--hide-text` | Aktif secara default | Hanya menampilkan lirik dalam bentuk huruf ASCII (tanpa lirik teks biasa). |
 | `--show-text` | Mati | Menampilkan baris lirik teks biasa sebelum/sesudah di atas dan bawah lirik ASCII. |
