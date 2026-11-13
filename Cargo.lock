@@ -282,6 +282,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "flate2",
  "image",
  "serde",
  "serde_json",

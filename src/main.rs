@@ -159,11 +159,17 @@ fn run_live_tui(cli: Cli) -> Result<()> {
             }
         }
 
-        if last_poll.elapsed() >= Duration::from_millis(450) {
-            last_poll = Instant::now();
-            if let Some(polled) = poll_active_track(cli.player.as_deref()) {
+        if last_poll.elapsed() >= Duration::from_millis(700) {
+            let poll_start = Instant::now();
+            last_poll = poll_start;
+            let polled_opt = poll_active_track(cli.player.as_deref());
+            let poll_end = Instant::now();
+            let sample_instant = poll_start + poll_end.duration_since(poll_start) / 2;
+
+            if let Some(polled) = polled_opt {
                 let key = polled.cache_key();
-                if key != current_key {
+                let is_new_track = key != current_key;
+                if is_new_track {
                     current_key = key.clone();
                     current_lyrics = LyricsPayload::NotFound;
                     current_cover = None;
@@ -196,8 +202,24 @@ fn run_live_tui(cli: Cli) -> Result<()> {
                         });
                     }
                 }
-                base_pos_secs = polled.position_secs;
-                last_pos_sync = Instant::now();
+
+                if is_new_track || polled.status != PlaybackStatus::Playing {
+                    base_pos_secs = polled.position_secs;
+                    last_pos_sync = sample_instant;
+                } else {
+                    let predicted = base_pos_secs
+                        + sample_instant
+                            .saturating_duration_since(last_pos_sync)
+                            .as_secs_f64();
+                    let drift = polled.position_secs - predicted;
+                    if drift.abs() > 0.25 {
+                        base_pos_secs = polled.position_secs;
+                        last_pos_sync = sample_instant;
+                    } else if drift.abs() > 0.015 {
+                        base_pos_secs = predicted + drift * 0.35;
+                        last_pos_sync = sample_instant;
+                    }
+                }
                 current_track = Some(polled);
             } else {
                 current_track = None;
@@ -207,7 +229,12 @@ fn run_live_tui(cli: Cli) -> Result<()> {
 
         if let Some(track) = &current_track {
             let live_pos = if track.status == PlaybackStatus::Playing {
-                (base_pos_secs + last_pos_sync.elapsed().as_secs_f64()).min(track.duration_secs)
+                let raw = base_pos_secs + last_pos_sync.elapsed().as_secs_f64();
+                if track.duration_secs > 1.0 {
+                    raw.min(track.duration_secs)
+                } else {
+                    raw
+                }
             } else {
                 base_pos_secs
             };
@@ -230,7 +257,7 @@ fn run_live_tui(cli: Cli) -> Result<()> {
             ui.render_waiting(hide_hud, cover_style, lyric_style, show_text_lyrics)?;
         }
 
-        match poll_user_action(Duration::from_millis(50))? {
+        match poll_user_action(Duration::from_millis(33))? {
             UserAction::Quit => break,
             UserAction::ToggleCover => show_cover = !show_cover,
             UserAction::CycleCoverStyle => {

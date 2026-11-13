@@ -6,6 +6,20 @@ pub struct RenderedAsciiLyric {
     pub visual_widths: Vec<usize>,
 }
 
+pub fn has_unsupported_glyphs(text: &str) -> bool {
+    let mut alpha_total = 0usize;
+    let mut non_ascii = 0usize;
+    for ch in text.chars() {
+        if ch.is_alphabetic() {
+            alpha_total += 1;
+            if !ch.is_ascii_alphabetic() {
+                non_ascii += 1;
+            }
+        }
+    }
+    alpha_total > 0 && non_ascii * 3 >= alpha_total
+}
+
 pub fn render_ascii_lyric(
     text: &str,
     max_cols: usize,
@@ -25,7 +39,7 @@ pub fn render_ascii_lyric(
         _ => 5,
     };
     let max_chars_per_line = (max_cols / char_stride).max(6);
-    let wrapped_lines = wrap_words(clean, max_chars_per_line, 3);
+    let wrapped_lines = wrap_words(clean, max_chars_per_line, 4);
 
     let total_chars: usize = wrapped_lines.iter().map(|l| l.chars().count()).sum();
     let sung_chars_float = (total_chars as f64) * progress.clamp(0.0, 1.0);
@@ -174,7 +188,7 @@ fn render_line_banner(line: &str, progress: f64) -> (Vec<String>, usize) {
                 row_buf.push(' ');
                 continue;
             }
-            let is_sung = x <= sung_col;
+            let is_sung = progress >= 1.0 || (progress > 0.0 && x < sung_col);
             if current_sung != Some(is_sung) {
                 if is_sung {
                     row_buf.push_str("\x1b[1;38;2;242;109;111m");
@@ -224,7 +238,7 @@ fn render_line_braille(line: &str, progress: f64) -> (Vec<String>, usize) {
                 row_buf.push(' ');
                 continue;
             }
-            let is_sung = cx <= sung_cell;
+            let is_sung = progress >= 1.0 || (progress > 0.0 && cx < sung_cell);
             if current_sung != Some(is_sung) {
                 if is_sung {
                     row_buf.push_str("\x1b[1;38;2;250;250;255m");
@@ -299,10 +313,15 @@ fn glyph_4x6(ch: char) -> [u8; 4] {
         '.' => [0b000000, 0b000010, 0b000000, 0b000000],
         '!' => [0b000000, 0b111010, 0b000000, 0b000000],
         '?' => [0b010000, 0b100110, 0b101000, 0b010000],
-        '-' => [0b001000, 0b001000, 0b001000, 0b000000],
+        '-' | '\u{2014}' | '\u{2013}' => [0b001000, 0b001000, 0b001000, 0b000000],
         ':' => [0b000000, 0b010010, 0b000000, 0b000000],
-        '(' => [0b000000, 0b011100, 0b100010, 0b000000],
-        ')' => [0b000000, 0b100010, 0b011100, 0b000000],
+        '(' | '（' => [0b000000, 0b011100, 0b100010, 0b000000],
+        ')' | '）' => [0b000000, 0b100010, 0b011100, 0b000000],
+        '$' => [0b010010, 0b111111, 0b101010, 0b010100],
+        '&' => [0b010100, 0b101010, 0b010100, 0b001010],
+        '/' => [0b000010, 0b000100, 0b001000, 0b010000],
+        '+' => [0b001000, 0b011100, 0b001000, 0b000000],
+        '*' => [0b010100, 0b001000, 0b010100, 0b000000],
         '♪' => [0b000110, 0b011110, 0b010000, 0b011100],
         ' ' => [0b000000, 0b000000, 0b000000, 0b000000],
         _ => [0b000000, 0b001100, 0b001100, 0b000000],

@@ -13,7 +13,7 @@ use crossterm::{
     },
 };
 
-use crate::ascii_font::render_ascii_lyric;
+use crate::ascii_font::{has_unsupported_glyphs, render_ascii_lyric};
 use crate::cli::{CoverStyle, LyricArtStyle};
 use crate::cover::AsciiCover;
 use crate::lyrics::LyricsPayload;
@@ -555,6 +555,19 @@ fn draw_ascii_active(
     progress: f64,
     lyric_style: LyricArtStyle,
 ) -> (isize, isize) {
+    if has_unsupported_glyphs(text) {
+        return draw_unicode_karaoke_active(
+            buf,
+            text,
+            col_start,
+            col_width,
+            center_y,
+            min_y,
+            max_y,
+            progress,
+        );
+    }
+
     let rendered = render_ascii_lyric(text, col_width.saturating_sub(2), progress, lyric_style);
     if rendered.rows.is_empty() {
         return (center_y, center_y);
@@ -580,6 +593,60 @@ fn draw_ascii_active(
     }
 
     (top_y, bot_y)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_unicode_karaoke_active(
+    buf: &mut String,
+    text: &str,
+    col_start: usize,
+    col_width: usize,
+    center_y: isize,
+    min_y: isize,
+    max_y: isize,
+    progress: f64,
+) -> (isize, isize) {
+    let clean = truncate_chars(text.trim(), col_width.saturating_sub(4));
+    let total_chars = clean.chars().count();
+    if total_chars == 0 {
+        return (center_y, center_y);
+    }
+    let vis_w = clean
+        .chars()
+        .map(|c| if c as u32 >= 0x1100 { 2 } else { 1 })
+        .sum::<usize>();
+    let pad = col_width.saturating_sub(vis_w) / 2;
+    let x = col_start + pad;
+
+    if center_y >= min_y && center_y <= max_y {
+        let sung_chars = ((total_chars as f64) * progress.clamp(0.0, 1.0)).round() as usize;
+        let edge_char = sung_chars.saturating_sub(1);
+        let mut line = String::with_capacity(clean.len() + 64);
+        let mut current_zone: Option<u8> = None;
+
+        for (i, ch) in clean.chars().enumerate() {
+            let zone = if progress >= 1.0 || (progress > 0.0 && i < edge_char) {
+                0
+            } else if progress > 0.0 && i <= sung_chars {
+                1
+            } else {
+                2
+            };
+            if current_zone != Some(zone) {
+                match zone {
+                    0 => line.push_str("\x1b[1;38;2;250;250;255m"),
+                    1 => line.push_str("\x1b[1;38;2;242;109;111m"),
+                    _ => line.push_str("\x1b[38;2;120;120;140m"),
+                }
+                current_zone = Some(zone);
+            }
+            line.push(ch);
+        }
+        line.push_str("\x1b[0m");
+        let _ = write!(buf, "\x1b[{center_y};{x}H{line}");
+    }
+
+    (center_y, center_y)
 }
 
 fn context_line_color(dist: isize) -> &'static str {

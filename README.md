@@ -7,7 +7,7 @@ Program ini bekerja otomatis tanpa memerlukan API Key atau login akun Spotify.
 ## Fitur Utama
 
 1. **Deteksi Lagu & Waktu Real-Time**: Membaca metadata lagu yang sedang diputar (`judul`, `artis`, `album`, `durasi`, `posisi detik`, dan `URL cover art`) dari aplikasi Spotify Desktop maupun pemutar MPRIS aktif lainnya.
-2. **Lirik Tersinkronisasi Waktu (LRC)**: Mengambil lirik *timestamp* baris demi baris dari **LRCLIB** dan menyorot baris yang sedang dinyanyikan tepat di tengah layar terminal.
+2. **Lirik Multi-Sumber & Sinkronisasi Per-Kata (Karaoke Akurat)**: Mengambil lirik secara bertingkat dari sumber terbaik hingga alternatif (**NetEase Cloud Music YRC/LRC**, **LRCLIB**, **KuGou KRC/LRC**, **Karalyr**, dan **Lyrics.ovh** untuk lirik teks biasa). Mendukung *word-level karaoke timing* (`YRC`, `KRC`, *Enhanced LRC*) dan kompensasi *drift* waktu MPRIS agar sapuan progres lirik tepat mengikuti vokal lagu.
 3. **Cover Art Album versi TrueColor Beresolusi Tinggi**: Mengunduh sampul album lagu secara otomatis dan merendernya di samping lirik dengan 5 pilihan gaya: `halfblock` (TrueColor fotorealistik 2 piksel/sel karakter menggunakan blok `▀`), `braille` (sub-piksel 2x4), `blocks` (`░▒▓█`), `detailed`, dan `standard`. Resolusi dan ketajaman ditingkatkan menggunakan filter resampling Lanczos3.
 4. **Penyimpanan Cache Lokal**: Menyimpan lirik dan sampul album di `~/.cache/lyricli/` sehingga lagu yang diputar ulang langsung tampil seketika tanpa mengunduh ulang.
 5. **Kontrol Pemutar Langsung dari Terminal**: Jeda/lanjutkan lagu, pindah ke lagu berikutnya/sebelumnya, *seek* maju/mundur 5 detik, atur *offset* sinkronisasi lirik, serta sembunyikan bar petunjuk tombol (`h`) untuk tampilan bersih.
@@ -110,7 +110,7 @@ lyricli/
     ├── main.rs          # Orkestrasi loop TUI, worker thread, dan sinkronisasi waktu
     ├── cli.rs           # Definisi flag dan argumen CLI (clap)
     ├── player.rs        # Integrasi MPRIS D-Bus (playerctl) untuk Spotify & pemutar aktif
-    ├── lyrics.rs        # Klien LRCLIB, parser timestamp LRC, dan manajemen cache lokal
+    ├── lyrics.rs        # Agregator multi-sumber (NetEase, LRCLIB, KuGou, Karalyr, Lyrics.ovh), parser YRC/KRC/LRC, & cache
     ├── cover.rs         # Pengunduh cover art dan konverter gambar ke ASCII TrueColor
     ├── ascii_font.rs    # Mesin tipografi huruf ASCII (Block, Braille, Banner) & sapuan karaoke
     └── ui.rs            # Renderer terminal anti-flicker dengan auto-centering penuh

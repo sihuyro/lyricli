@@ -29,8 +29,18 @@ impl TrackState {
             self.album.trim().to_ascii_lowercase(),
             self.duration_secs.round() as u64
         );
-        sanitize_filename(&raw)
+        let hash = fnv1a_64(raw.as_bytes());
+        format!("{}_{hash:016x}", sanitize_filename(&raw))
     }
+}
+
+pub fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 pub fn sanitize_filename(input: &str) -> String {
