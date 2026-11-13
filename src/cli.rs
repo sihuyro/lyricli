@@ -40,8 +40,20 @@ pub struct Cli {
     pub hide_controls: bool,
 
     /// Initial lyric timing offset in milliseconds (negative = earlier, positive = later)
-    #[arg(short, long, default_value_t = 0)]
-    pub offset: i64,
+    #[arg(short, long)]
+    pub offset: Option<i64>,
+
+    /// Disable automatic romanization for non-Latin lyrics (toggle live with 'r')
+    #[arg(long)]
+    pub no_romanize: bool,
+
+    /// Disable dynamic accent colors extracted from the album cover (toggle live with 'd')
+    #[arg(long)]
+    pub no_dynamic_color: bool,
+
+    /// Ignore cached lyrics and fetch fresh from online sources
+    #[arg(long)]
+    pub no_cache: bool,
 
     /// Search and display lyrics for a specific track title without an active player
     #[arg(long)]

@@ -1,4 +1,7 @@
+use std::fmt::Write as FmtWrite;
+
 use crate::cli::LyricArtStyle;
+use crate::cover::ThemePalette;
 
 #[derive(Clone, Debug)]
 pub struct RenderedAsciiLyric {
@@ -25,6 +28,7 @@ pub fn render_ascii_lyric(
     max_cols: usize,
     progress: f64,
     style: LyricArtStyle,
+    palette: ThemePalette,
 ) -> RenderedAsciiLyric {
     let clean = text.trim();
     if clean.is_empty() {
@@ -62,9 +66,9 @@ pub fn render_ascii_lyric(
         chars_before_line += line_char_count;
 
         let (mut rows, width) = match style {
-            LyricArtStyle::Block => render_line_halfblock(line_str, line_progress),
-            LyricArtStyle::Banner => render_line_banner(line_str, line_progress),
-            LyricArtStyle::Braille => render_line_braille(line_str, line_progress),
+            LyricArtStyle::Block => render_line_halfblock(line_str, line_progress, palette),
+            LyricArtStyle::Banner => render_line_banner(line_str, line_progress, palette),
+            LyricArtStyle::Braille => render_line_braille(line_str, line_progress, palette),
         };
 
         for _ in 0..rows.len() {
@@ -140,7 +144,11 @@ fn wrap_words(text: &str, max_pixel_cols: usize, max_lines: usize) -> Vec<String
     lines
 }
 
-fn render_line_halfblock(line: &str, progress: f64) -> (Vec<String>, usize) {
+fn render_line_halfblock(
+    line: &str,
+    progress: f64,
+    palette: ThemePalette,
+) -> (Vec<String>, usize) {
     let pixel_cols = build_bitmap_columns(line);
     let total_w = pixel_cols.len();
     let sung_col = ((total_w as f64) * progress).round() as usize;
@@ -181,8 +189,14 @@ fn render_line_halfblock(line: &str, progress: f64) -> (Vec<String>, usize) {
 
             if current_zone != Some(zone) {
                 match zone {
-                    0 => row_buf.push_str("\x1b[1;38;2;250;250;255m"),
-                    1 => row_buf.push_str("\x1b[1;38;2;242;109;111m"),
+                    0 => {
+                        let [r, g, b] = palette.sung;
+                        let _ = write!(row_buf, "\x1b[1;38;2;{r};{g};{b}m");
+                    }
+                    1 => {
+                        let [r, g, b] = palette.accent;
+                        let _ = write!(row_buf, "\x1b[1;38;2;{r};{g};{b}m");
+                    }
                     _ => row_buf.push_str("\x1b[38;2;112;112;130m"),
                 }
                 current_zone = Some(zone);
@@ -195,7 +209,7 @@ fn render_line_halfblock(line: &str, progress: f64) -> (Vec<String>, usize) {
     (rows, total_w)
 }
 
-fn render_line_banner(line: &str, progress: f64) -> (Vec<String>, usize) {
+fn render_line_banner(line: &str, progress: f64, palette: ThemePalette) -> (Vec<String>, usize) {
     let pixel_cols = build_bitmap_columns(line);
     let total_w = pixel_cols.len();
     let sung_col = ((total_w as f64) * progress).round() as usize;
@@ -213,7 +227,8 @@ fn render_line_banner(line: &str, progress: f64) -> (Vec<String>, usize) {
             let is_sung = progress >= 1.0 || (progress > 0.0 && x < sung_col);
             if current_sung != Some(is_sung) {
                 if is_sung {
-                    row_buf.push_str("\x1b[1;38;2;242;109;111m");
+                    let [r, g, b] = palette.accent;
+                    let _ = write!(row_buf, "\x1b[1;38;2;{r};{g};{b}m");
                 } else {
                     row_buf.push_str("\x1b[38;2;112;112;130m");
                 }
@@ -228,7 +243,7 @@ fn render_line_banner(line: &str, progress: f64) -> (Vec<String>, usize) {
     (rows, total_w)
 }
 
-fn render_line_braille(line: &str, progress: f64) -> (Vec<String>, usize) {
+fn render_line_braille(line: &str, progress: f64, palette: ThemePalette) -> (Vec<String>, usize) {
     let pixel_cols = build_bitmap_columns(line);
     let total_px_w = pixel_cols.len();
     let cell_w = total_px_w.div_ceil(2);
@@ -263,7 +278,8 @@ fn render_line_braille(line: &str, progress: f64) -> (Vec<String>, usize) {
             let is_sung = progress >= 1.0 || (progress > 0.0 && cx < sung_cell);
             if current_sung != Some(is_sung) {
                 if is_sung {
-                    row_buf.push_str("\x1b[1;38;2;250;250;255m");
+                    let [r, g, b] = palette.sung;
+                    let _ = write!(row_buf, "\x1b[1;38;2;{r};{g};{b}m");
                 } else {
                     row_buf.push_str("\x1b[38;2;112;112;130m");
                 }
@@ -360,7 +376,13 @@ mod tests {
             LyricArtStyle::Banner,
             LyricArtStyle::Braille,
         ] {
-            let rendered = render_ascii_lyric("Hello World", 80, 0.5, style);
+            let rendered = render_ascii_lyric(
+                "Hello World",
+                80,
+                0.5,
+                style,
+                ThemePalette::default(),
+            );
             assert!(!rendered.rows.is_empty());
             assert_eq!(rendered.rows.len(), rendered.visual_widths.len());
             assert!(rendered.visual_widths[0] > 0);

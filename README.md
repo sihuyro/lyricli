@@ -7,10 +7,11 @@ Program ini bekerja otomatis tanpa memerlukan API Key atau login akun Spotify.
 ## Fitur Utama
 
 1. **Deteksi Lagu & Waktu Real-Time**: Membaca metadata lagu yang sedang diputar (`judul`, `artis`, `album`, `durasi`, `posisi detik`, dan `URL cover art`) dari aplikasi Spotify Desktop maupun pemutar MPRIS aktif lainnya.
-2. **Lirik Multi-Sumber & Sinkronisasi Per-Kata (Karaoke Akurat)**: Mengambil lirik secara bertingkat dari sumber terbaik hingga alternatif (**NetEase Cloud Music YRC/LRC**, **LRCLIB**, **KuGou KRC/LRC**, **Karalyr**, dan **Lyrics.ovh** untuk lirik teks biasa). Mendukung *word-level karaoke timing* (`YRC`, `KRC`, *Enhanced LRC*) dan kompensasi *drift* waktu MPRIS agar sapuan progres lirik tepat mengikuti vokal lagu.
-3. **Cover Art Album versi TrueColor Beresolusi Tinggi**: Mengunduh sampul album lagu secara otomatis dan merendernya di samping lirik dengan 5 pilihan gaya: `halfblock` (TrueColor fotorealistik 2 piksel/sel karakter menggunakan blok `▀`), `braille` (sub-piksel 2x4), `blocks` (`░▒▓█`), `detailed`, dan `standard`. Resolusi dan ketajaman ditingkatkan menggunakan filter resampling Lanczos3.
-4. **Penyimpanan Cache Lokal**: Menyimpan lirik dan sampul album di `~/.cache/lyricli/` sehingga lagu yang diputar ulang langsung tampil seketika tanpa mengunduh ulang.
-5. **Kontrol Pemutar Langsung dari Terminal**: Jeda/lanjutkan lagu, pindah ke lagu berikutnya/sebelumnya, *seek* maju/mundur 5 detik, atur *offset* sinkronisasi lirik, serta sembunyikan bar petunjuk tombol (`h`) untuk tampilan bersih.
+2. **Lirik Multi-Sumber & Sinkronisasi Per-Kata (Karaoke Akurat)**: Mengambil lirik secara bertingkat dari sumber terbaik hingga alternatif (**NetEase Cloud Music YRC/LRC + romalrc**, **LRCLIB**, **KuGou KRC/LRC**, **Karalyr**, dan **Lyrics.ovh** untuk lirik teks biasa). Mendukung *word-level karaoke timing* (`YRC`, `KRC`, *Enhanced LRC*) dan kompensasi *drift* waktu MPRIS agar sapuan progres lirik tepat mengikuti vokal lagu.
+3. **Romanisasi Otomatis & Multi-Baris Unicode**: Mendukung romanisasi otomatis untuk lagu Jepang/Korea (`romalrc` NetEase dan konversi Hangul otomatis ke abjad Latin) agar bisa tampil dalam tipografi ASCII besar beserta teks aslinya di bawahnya, serta pembungkusan (*word-wrap*) hingga 3 baris untuk teks Unicode panjang.
+4. **Cover Art TrueColor & Tema Warna Dinamis**: Mengunduh sampul album secara otomatis dengan 5 gaya karakter (`halfblock`, `braille`, `blocks`, `detailed`, `standard`), mengekstrak palet warna dominan sampul album untuk mewarnai sapuan lirik dan progress bar secara dinamis, serta menaburkan manik-manik bintang (*starfield*) halus di sekitar lirik.
+5. **Penyimpanan Cache & Offset Per-Lagu**: Menyimpan lirik, sampul album, dan pengaturan *offset* masing-masing lagu di `~/.cache/lyricli/` sehingga lagu yang diputar ulang tetap sinkron otomatis.
+6. **Kontrol Pemutar Langsung dari Terminal**: Jeda/lanjutkan lagu, pindah ke lagu berikutnya/sebelumnya, *seek* maju/mundur 5 detik, atur *offset* per-lagu, ambil ulang lirik (`R`/`F5`), toggle romanisasi (`r`), toggle tema warna dinamis (`d`), serta sembunyikan bar petunjuk tombol (`h`).
 
 ## Prasyarat Sistem
 
@@ -77,7 +78,10 @@ lyricli --track "Amoeba" --artist "Clairo"
 | `v` | Ganti gaya karakter Cover Art (`halfblock`, `braille`, `blocks`, `detailed`, `standard`) |
 | `f` | Ganti gaya tipografi ASCII baris lirik aktif (`block`, `braille`, `banner`) |
 | `t` | Sembunyikan atau tampilkan baris lirik teks biasa di atas/bawah lirik ASCII (default: disembunyikan) |
-| `[` / `]` | Geser waktu sinkronisasi lirik (`-250ms` / `+250ms`) |
+| `r` | Aktifkan atau matikan romanisasi untuk lirik non-Latin (Jepang/Korea) |
+| `d` | Ganti tema warna antara palet dinamis sampul album dan warna default |
+| `R` / `F5` | Ambil ulang (*refetch*) lirik dari server tanpa memakai cache lokal |
+| `[` / `]` | Geser waktu sinkronisasi lirik (`-250ms` / `+250ms`, tersimpan otomatis per lagu) |
 | `↑` / `↓` (`k` / `j`) | Geser baris lirik secara manual |
 | `h` | Sembunyikan atau tampilkan bar petunjuk tombol di bagian bawah |
 | `q` / `Esc` / `Ctrl+C` | Keluar dari `lyricli` |
@@ -88,13 +92,16 @@ lyricli --track "Amoeba" --artist "Clairo"
 | :--- | :--- | :--- |
 | `-p, --player <NAME>` | Prioritas `spotify` | Nama pemutar MPRIS spesifik yang ingin dipantau. |
 | `--no-cover` | Mati | Menyembunyikan sampul album ASCII saat pertama kali dijalankan. |
+| `--no-romanize` | Mati | Menonaktifkan romanisasi otomatis untuk lirik non-Latin sejak awal. |
+| `--no-dynamic-color` | Mati | Memakai tema warna default sejak awal (mengabaikan warna sampul album). |
+| `--no-cache` | Mati | Mengabaikan cache lirik lokal saat memulai pemutaran atau pencarian. |
 | `-c, --charset <STYLE>` | `halfblock` | Gaya karakter sampul album: `halfblock`, `braille`, `blocks`, `detailed`, `standard`. |
 | `-l, --lyric-style <STYLE>` | `block` | Gaya huruf ASCII untuk baris lirik aktif: `block`, `braille`, `banner`. |
 | `--hide-text` | Aktif secara default | Hanya menampilkan lirik dalam bentuk huruf ASCII (tanpa lirik teks biasa). |
 | `--show-text` | Mati | Menampilkan baris lirik teks biasa sebelum/sesudah di atas dan bawah lirik ASCII. |
 | `--cover-width <COLS>` | `34` | Lebar sampul album ASCII dalam jumlah kolom terminal. |
 | `--hide-controls` / `--no-hud` | Mati | Menyembunyikan bar petunjuk tombol di bagian bawah sejak awal. |
-| `-o, --offset <MS>` | `0` | Pergeseran waktu lirik dalam milidetik. |
+| `-o, --offset <MS>` | Otomatis per lagu (`0`) | Memaksa pergeseran waktu lirik manual dalam milidetik. |
 | `--track <TITLE>` | Kosong | Mencari lirik berdasarkan judul lagu secara manual. |
 | `--artist <NAME>` | Kosong | Nama artis pendamping saat menggunakan `--track`. |
 | `--print` | Mati | Mencetak lirik langsung ke terminal standar lalu keluar. |

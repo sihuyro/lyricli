@@ -28,6 +28,8 @@ pub struct LyricLine {
     #[serde(default)]
     pub words: Vec<WordTiming>,
     pub text: String,
+    #[serde(default)]
+    pub roma: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -78,6 +80,7 @@ struct NetEaseArtist {
 struct NetEaseLyricResp {
     lrc: Option<NetEaseLyricBlock>,
     yrc: Option<NetEaseLyricBlock>,
+    romalrc: Option<NetEaseLyricBlock>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +119,7 @@ struct LyricsOvhResp {
 struct ScoredCandidate {
     payload: LyricsPayload,
     score: i32,
+    roma_lines: Option<Vec<LyricLine>>,
 }
 
 impl LyricsPayload {
@@ -177,7 +181,12 @@ impl LyricsPayload {
                     .and_then(|l| l.time_secs)
                     .unwrap_or_else(|| (start_t + 4.5).min(total_duration.max(start_t + 4.5)));
                 let raw_gap = (next_t - start_t).max(0.35);
-                let line_chars = line.text.chars().count();
+                let line_chars = line
+                    .roma
+                    .as_deref()
+                    .unwrap_or(&line.text)
+                    .chars()
+                    .count();
                 let est_sung = ((line_chars as f64) * 0.13).clamp(1.6, 8.5);
                 let span = if raw_gap > est_sung * 1.45 && raw_gap > 4.0 {
                     (est_sung * 1.25).min(raw_gap * 0.90)
@@ -235,18 +244,49 @@ pub fn cache_dir() -> PathBuf {
     dir
 }
 
-pub fn fetch_lyrics_for_track(track: &TrackState) -> LyricsPayload {
+pub fn load_track_offset(cache_key: &str) -> i64 {
+    let path = cache_dir().join("offsets.json");
+    let Ok(bytes) = fs::read(path) else {
+        return 0;
+    };
+    let Ok(map) = serde_json::from_slice::<std::collections::HashMap<String, i64>>(&bytes) else {
+        return 0;
+    };
+    map.get(cache_key).copied().unwrap_or(0)
+}
+
+pub fn save_track_offset(cache_key: &str, offset_ms: i64) {
+    let path = cache_dir().join("offsets.json");
+    let mut map: std::collections::HashMap<String, i64> = fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if offset_ms == 0 {
+        map.remove(cache_key);
+    } else {
+        map.insert(cache_key.to_string(), offset_ms);
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(&map) {
+        let _ = fs::write(path, json);
+    }
+}
+
+pub fn fetch_lyrics_for_track(track: &TrackState, use_cache: bool) -> LyricsPayload {
     let key = track.cache_key();
     let cache_path = cache_dir().join("lyrics").join(format!("{key}.json"));
 
-    if let Ok(cached_bytes) = fs::read(&cache_path)
-        && let Ok(payload) = serde_json::from_slice::<LyricsPayload>(&cached_bytes)
+    if use_cache
+        && let Ok(cached_bytes) = fs::read(&cache_path)
+        && let Ok(mut payload) = serde_json::from_slice::<LyricsPayload>(&cached_bytes)
         && !matches!(payload, LyricsPayload::NotFound)
     {
+        attach_auto_romanization(&mut payload);
         return payload;
     }
 
-    let payload = query_multi_source(&track.artist, &track.title, &track.album, track.duration_secs);
+    let mut payload =
+        query_multi_source(&track.artist, &track.title, &track.album, track.duration_secs);
+    attach_auto_romanization(&mut payload);
     if !matches!(payload, LyricsPayload::NotFound)
         && let Ok(json) = serde_json::to_vec(&payload)
     {
@@ -255,20 +295,23 @@ pub fn fetch_lyrics_for_track(track: &TrackState) -> LyricsPayload {
     payload
 }
 
-pub fn fetch_lyrics_by_query(artist: Option<&str>, title: &str) -> LyricsPayload {
+pub fn fetch_lyrics_by_query(artist: Option<&str>, title: &str, use_cache: bool) -> LyricsPayload {
     let artist_str = artist.unwrap_or("");
     let raw = format!("search_{artist_str}_{title}");
     let key = format!("{}_{:016x}", sanitize_filename(&raw), fnv1a_64(raw.as_bytes()));
     let cache_path = cache_dir().join("lyrics").join(format!("{key}.json"));
 
-    if let Ok(cached_bytes) = fs::read(&cache_path)
-        && let Ok(payload) = serde_json::from_slice::<LyricsPayload>(&cached_bytes)
+    if use_cache
+        && let Ok(cached_bytes) = fs::read(&cache_path)
+        && let Ok(mut payload) = serde_json::from_slice::<LyricsPayload>(&cached_bytes)
         && !matches!(payload, LyricsPayload::NotFound)
     {
+        attach_auto_romanization(&mut payload);
         return payload;
     }
 
-    let payload = query_multi_source(artist_str, title, "", 0.0);
+    let mut payload = query_multi_source(artist_str, title, "", 0.0);
+    attach_auto_romanization(&mut payload);
     if !matches!(payload, LyricsPayload::NotFound)
         && let Ok(json) = serde_json::to_vec(&payload)
     {
@@ -277,34 +320,47 @@ pub fn fetch_lyrics_by_query(artist: Option<&str>, title: &str) -> LyricsPayload
     payload
 }
 
+fn finalize_with_roma(mut payload: LyricsPayload, extra_roma: Option<&[LyricLine]>) -> LyricsPayload {
+    if let (LyricsPayload::Synced(lines), Some(roma)) = (&mut payload, extra_roma) {
+        attach_roma_lines(lines, roma);
+    }
+    attach_auto_romanization(&mut payload);
+    payload
+}
+
 fn query_multi_source(artist: &str, title: &str, album: &str, duration_secs: f64) -> LyricsPayload {
-    // Tier 1 (parallel): LRCLIB + NetEase (word-synced YRC / clean LRC).
+    // Tier 1 (parallel): LRCLIB + NetEase (word-synced YRC / clean LRC + romalrc).
     let (lrclib_cand, netease_cand) = std::thread::scope(|s| {
-        let h_lrc = s.spawn(|| query_lrclib_family("https://lrclib.net", artist, title, album, duration_secs, 15));
+        let h_lrc = s.spawn(|| {
+            query_lrclib_family("https://lrclib.net", artist, title, album, duration_secs, 15)
+        });
         let h_ne = s.spawn(|| query_netease(artist, title, duration_secs));
         (h_lrc.join().ok().flatten(), h_ne.join().ok().flatten())
     });
 
+    let netease_roma = netease_cand.as_ref().and_then(|c| c.roma_lines.clone());
     let mut best_tier1 = pick_best_candidate(lrclib_cand, netease_cand);
-    if let Some(ref best) = best_tier1
+    if let Some(best) = best_tier1.as_ref()
         && matches!(best.payload, LyricsPayload::Synced(_) | LyricsPayload::Instrumental)
     {
-        return best.payload.clone();
+        return finalize_with_roma(best.payload.clone(), netease_roma.as_deref());
     }
 
     // Tier 2 (parallel): KuGou (word-synced KRC / LRC) + Karalyr fallback.
     let (kugou_cand, karalyr_cand) = std::thread::scope(|s| {
         let h_kg = s.spawn(|| query_kugou(artist, title, duration_secs));
-        let h_kr = s.spawn(|| query_lrclib_family("https://karalyr.com", artist, title, album, duration_secs, 0));
+        let h_kr = s.spawn(|| {
+            query_lrclib_family("https://karalyr.com", artist, title, album, duration_secs, 0)
+        });
         (h_kg.join().ok().flatten(), h_kr.join().ok().flatten())
     });
 
     let best_tier2 = pick_best_candidate(kugou_cand, karalyr_cand);
     best_tier1 = pick_best_candidate(best_tier1, best_tier2);
-    if let Some(ref best) = best_tier1
+    if let Some(best) = best_tier1.as_ref()
         && matches!(best.payload, LyricsPayload::Synced(_) | LyricsPayload::Instrumental)
     {
-        return best.payload.clone();
+        return finalize_with_roma(best.payload.clone(), netease_roma.as_deref());
     }
 
     // Tier 3: Plain lyrics fallback (already found plain or query lyrics.ovh).
@@ -377,7 +433,11 @@ fn query_lrclib_family(
                 let payload = convert_lrclib_response(resp);
                 if !matches!(payload, LyricsPayload::NotFound) {
                     let score = payload_quality_score(&payload) + 95 + provider_bias;
-                    return Some(ScoredCandidate { payload, score });
+                    return Some(ScoredCandidate {
+                        payload,
+                        score,
+                        roma_lines: None,
+                    });
                 }
             }
         }
@@ -398,7 +458,11 @@ fn query_lrclib_family(
             let payload = convert_lrclib_response(resp);
             if !matches!(payload, LyricsPayload::NotFound) {
                 let score = payload_quality_score(&payload) + meta_score + provider_bias;
-                let cand = ScoredCandidate { payload, score };
+                let cand = ScoredCandidate {
+                    payload,
+                    score,
+                    roma_lines: None,
+                };
                 let is_synced = matches!(
                     cand.payload,
                     LyricsPayload::Synced(_) | LyricsPayload::Instrumental
@@ -594,7 +658,7 @@ fn query_netease(artist: &str, title: &str, duration_secs: f64) -> Option<Scored
 
     for (song, meta_score) in ranked.into_iter().take(2) {
         let lyric_url = format!(
-            "https://music.163.com/api/song/lyric?os=pc&id={}&lv=1&kv=1&tv=-1&yv=1",
+            "https://music.163.com/api/song/lyric?os=pc&id={}&lv=1&kv=1&tv=-1&yv=1&rv=1",
             song.id
         );
         let Ok(lrc_out) = Command::new("curl")
@@ -622,18 +686,32 @@ fn query_netease(artist: &str, title: &str, duration_secs: f64) -> Option<Scored
             continue;
         };
 
+        let roma_lines = resp
+            .romalrc
+            .and_then(|r| r.lyric)
+            .map(|raw| parse_lrc(&raw))
+            .filter(|v| !v.is_empty());
+
         if let Some(yrc_raw) = resp.yrc.and_then(|y| y.lyric) {
             if is_netease_instrumental(&yrc_raw) {
                 return Some(ScoredCandidate {
                     payload: LyricsPayload::Instrumental,
                     score: 120 + meta_score,
+                    roma_lines: None,
                 });
             }
-            let lines = parse_yrc(&yrc_raw);
+            let mut lines = parse_yrc(&yrc_raw);
             if !lines.is_empty() {
+                if let Some(ref roma) = roma_lines {
+                    attach_roma_lines(&mut lines, roma);
+                }
                 let payload = LyricsPayload::Synced(lines);
                 let score = payload_quality_score(&payload) + meta_score;
-                return Some(ScoredCandidate { payload, score });
+                return Some(ScoredCandidate {
+                    payload,
+                    score,
+                    roma_lines,
+                });
             }
         }
 
@@ -642,13 +720,21 @@ fn query_netease(artist: &str, title: &str, duration_secs: f64) -> Option<Scored
                 return Some(ScoredCandidate {
                     payload: LyricsPayload::Instrumental,
                     score: 120 + meta_score,
+                    roma_lines: None,
                 });
             }
-            let lines = parse_lrc(&lrc_raw);
+            let mut lines = parse_lrc(&lrc_raw);
             if !lines.is_empty() {
+                if let Some(ref roma) = roma_lines {
+                    attach_roma_lines(&mut lines, roma);
+                }
                 let payload = LyricsPayload::Synced(lines);
                 let score = payload_quality_score(&payload) + meta_score;
-                return Some(ScoredCandidate { payload, score });
+                return Some(ScoredCandidate {
+                    payload,
+                    score,
+                    roma_lines,
+                });
             }
             let plain: Vec<String> = lrc_raw
                 .lines()
@@ -658,7 +744,11 @@ fn query_netease(artist: &str, title: &str, duration_secs: f64) -> Option<Scored
             if !plain.is_empty() {
                 let payload = LyricsPayload::Plain(plain);
                 let score = payload_quality_score(&payload) + meta_score;
-                return Some(ScoredCandidate { payload, score });
+                return Some(ScoredCandidate {
+                    payload,
+                    score,
+                    roma_lines,
+                });
             }
         }
     }
@@ -731,7 +821,11 @@ fn query_kugou(artist: &str, title: &str, duration_secs: f64) -> Option<ScoredCa
             if !lines.is_empty() {
                 let payload = LyricsPayload::Synced(lines);
                 let score = payload_quality_score(&payload) + meta_score;
-                return Some(ScoredCandidate { payload, score });
+                return Some(ScoredCandidate {
+                    payload,
+                    score,
+                    roma_lines: None,
+                });
             }
         }
 
@@ -743,7 +837,11 @@ fn query_kugou(artist: &str, title: &str, duration_secs: f64) -> Option<ScoredCa
             if !lines.is_empty() {
                 let payload = LyricsPayload::Synced(lines);
                 let score = payload_quality_score(&payload) + meta_score;
-                return Some(ScoredCandidate { payload, score });
+                return Some(ScoredCandidate {
+                    payload,
+                    score,
+                    roma_lines: None,
+                });
             }
         }
     }
@@ -978,6 +1076,7 @@ pub fn parse_lrc(lrc_text: &str) -> Vec<LyricLine> {
                     end_secs: None,
                     words: Vec::new(),
                     text: "♪".to_string(),
+                    roma: None,
                 });
             }
             continue;
@@ -989,6 +1088,7 @@ pub fn parse_lrc(lrc_text: &str) -> Vec<LyricLine> {
                 end_secs: parsed_words.last().map(|w| w.end_secs),
                 words: parsed_words.clone(),
                 text: clean_text.clone(),
+                roma: None,
             });
         }
     }
@@ -1084,6 +1184,7 @@ fn parse_yrc(yrc_text: &str) -> Vec<LyricLine> {
             end_secs: Some(end_secs),
             words,
             text,
+            roma: None,
         });
     }
 
@@ -1134,6 +1235,7 @@ fn parse_krc(krc_text: &str) -> Vec<LyricLine> {
             end_secs: Some(end_secs),
             words,
             text,
+            roma: None,
         });
     }
 
@@ -1325,6 +1427,94 @@ pub fn print_lyrics_stdout(title: &str, artist: &str, payload: &LyricsPayload) -
     Ok(())
 }
 
+fn attach_roma_lines(lines: &mut [LyricLine], roma_lines: &[LyricLine]) {
+    if roma_lines.is_empty() {
+        return;
+    }
+
+    for line in lines.iter_mut() {
+        if line.roma.is_some() || !has_non_ascii_letters(&line.text) {
+            continue;
+        }
+        let Some(t) = line.time_secs else {
+            continue;
+        };
+
+        let best = roma_lines
+            .iter()
+            .filter_map(|r| {
+                let rt = r.time_secs?;
+                let diff = (rt - t).abs();
+                let clean = r.text.trim();
+                if diff <= 0.65 && !clean.is_empty() && clean != "♪" {
+                    Some((diff, clean))
+                } else {
+                    None
+                }
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+
+        if let Some((_, matched)) = best {
+            line.roma = Some(matched.to_string());
+        }
+    }
+}
+
+fn attach_auto_romanization(payload: &mut LyricsPayload) {
+    let LyricsPayload::Synced(lines) = payload else {
+        return;
+    };
+    for line in lines.iter_mut() {
+        if line.roma.is_some() {
+            continue;
+        }
+        if let Some(roma) = romanize_hangul(&line.text) {
+            line.roma = Some(roma);
+        }
+    }
+}
+
+fn has_non_ascii_letters(text: &str) -> bool {
+    text.chars().any(|c| !c.is_ascii() && c.is_alphabetic())
+}
+
+// Revised Romanization of Hangul syllables (U+AC00..=U+D7A3) as offline fallback.
+pub fn romanize_hangul(text: &str) -> Option<String> {
+    const INITIALS: [&str; 19] = [
+        "g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t",
+        "p", "h",
+    ];
+    const MEDIALS: [&str; 21] = [
+        "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo",
+        "we", "wi", "yu", "eu", "ui", "i",
+    ];
+    const FINALS: [&str; 28] = [
+        "", "k", "kk", "k", "n", "n", "n", "t", "l", "lk", "lm", "lp", "l", "l", "l", "l", "m",
+        "p", "p", "t", "t", "ng", "t", "t", "k", "t", "p", "t",
+    ];
+
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut converted_any = false;
+
+    for ch in text.chars() {
+        let code = ch as u32;
+        if (0xAC00..=0xD7A3).contains(&code) {
+            let s_idx = (code - 0xAC00) as usize;
+            let init = s_idx / 588;
+            let med = (s_idx % 588) / 28;
+            let fin = s_idx % 28;
+            out.push_str(INITIALS[init]);
+            out.push_str(MEDIALS[med]);
+            out.push_str(FINALS[fin]);
+            converted_any = true;
+        } else {
+            out.push(ch);
+        }
+    }
+
+    if converted_any { Some(out) } else { None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1369,5 +1559,20 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].text, "Hello world");
         assert_eq!(parsed[0].words.len(), 2);
+    }
+
+    #[test]
+    fn romanizes_hangul_syllables_and_attaches_romalrc() {
+        assert_eq!(
+            romanize_hangul("사랑해 Hurt").as_deref(),
+            Some("saranghae Hurt")
+        );
+        assert_eq!(romanize_hangul("English only"), None);
+
+        let mut base = parse_lrc("[00:10.00] 夜に浮かんでいた\n[00:14.00] Yeah\n");
+        let roma = parse_lrc("[00:10.05] yo ru ni u ka n de i ta\n[00:14.00] Yeah\n");
+        attach_roma_lines(&mut base, &roma);
+        assert_eq!(base[0].roma.as_deref(), Some("yo ru ni u ka n de i ta"));
+        assert_eq!(base[1].roma, None);
     }
 }

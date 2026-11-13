@@ -15,7 +15,8 @@ use clap::Parser;
 use crate::cli::{Cli, CoverStyle};
 use crate::cover::{AsciiCover, load_and_render_cover};
 use crate::lyrics::{
-    LyricsPayload, fetch_lyrics_by_query, fetch_lyrics_for_track, print_lyrics_stdout,
+    LyricsPayload, fetch_lyrics_by_query, fetch_lyrics_for_track, load_track_offset,
+    print_lyrics_stdout, save_track_offset,
 };
 use crate::player::{
     PlaybackStatus, TrackState, player_next, player_play_pause, player_previous,
@@ -37,9 +38,10 @@ enum WorkerEvent {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let use_cache = !cli.no_cache;
 
     if let Some(track_title) = &cli.track {
-        let payload = fetch_lyrics_by_query(cli.artist.as_deref(), track_title);
+        let payload = fetch_lyrics_by_query(cli.artist.as_deref(), track_title, use_cache);
         if cli.print {
             return print_lyrics_stdout(
                 track_title,
@@ -55,7 +57,7 @@ fn main() -> Result<()> {
             println!("Tidak ada pemutar musik aktif yang terdeteksi.");
             return Ok(());
         };
-        let payload = fetch_lyrics_for_track(&track);
+        let payload = fetch_lyrics_for_track(&track, use_cache);
         return print_lyrics_stdout(&track.title, &track.artist, &payload);
     }
 
@@ -72,6 +74,8 @@ fn run_static_query_tui(
     let mut hide_hud = cli.hide_controls;
     let mut lyric_style = cli.lyric_style;
     let mut show_text_lyrics = cli.show_text && !cli.hide_text;
+    let mut romanize = !cli.no_romanize;
+    let mut dynamic_color = !cli.no_dynamic_color;
     let mut manual_scroll: isize = 0;
 
     let synth_track = TrackState {
@@ -96,8 +100,10 @@ fn run_static_query_tui(
             cli.charset,
             lyric_style,
             show_text_lyrics,
+            romanize,
+            dynamic_color,
             hide_hud,
-            0,
+            cli.offset.unwrap_or(0),
             manual_scroll,
             false,
         )?;
@@ -107,6 +113,8 @@ fn run_static_query_tui(
             UserAction::ToggleHud => hide_hud = !hide_hud,
             UserAction::CycleLyricStyle => lyric_style = lyric_style.next(),
             UserAction::ToggleTextLyrics => show_text_lyrics = !show_text_lyrics,
+            UserAction::ToggleRomanize => romanize = !romanize,
+            UserAction::ToggleDynamicTheme => dynamic_color = !dynamic_color,
             UserAction::ScrollUp => manual_scroll = manual_scroll.saturating_sub(1),
             UserAction::ScrollDown => manual_scroll = manual_scroll.saturating_add(1),
             _ => {}
@@ -114,6 +122,19 @@ fn run_static_query_tui(
     }
 
     Ok(())
+}
+
+fn spawn_lyrics_fetch(tx: &mpsc::Sender<WorkerEvent>, track: &TrackState, use_cache: bool) {
+    let tx_lyrics = tx.clone();
+    let track_clone = track.clone();
+    let key_clone = track.cache_key();
+    thread::spawn(move || {
+        let payload = fetch_lyrics_for_track(&track_clone, use_cache);
+        let _ = tx_lyrics.send(WorkerEvent::LyricsReady {
+            cache_key: key_clone,
+            payload,
+        });
+    });
 }
 
 fn run_live_tui(cli: Cli) -> Result<()> {
@@ -124,8 +145,10 @@ fn run_live_tui(cli: Cli) -> Result<()> {
     let mut cover_style = cli.charset;
     let mut lyric_style = cli.lyric_style;
     let mut show_text_lyrics = cli.show_text && !cli.hide_text;
+    let mut romanize = !cli.no_romanize;
+    let mut dynamic_color = !cli.no_dynamic_color;
     let mut hide_hud = cli.hide_controls;
-    let mut offset_ms = cli.offset;
+    let mut offset_ms = cli.offset.unwrap_or(0);
     let mut manual_scroll: isize = 0;
 
     let mut current_track: Option<TrackState> = None;
@@ -175,17 +198,9 @@ fn run_live_tui(cli: Cli) -> Result<()> {
                     current_cover = None;
                     loading_lyrics = true;
                     manual_scroll = 0;
+                    offset_ms = cli.offset.unwrap_or_else(|| load_track_offset(&key));
 
-                    let tx_lyrics = tx.clone();
-                    let track_clone = polled.clone();
-                    let key_clone = key.clone();
-                    thread::spawn(move || {
-                        let payload = fetch_lyrics_for_track(&track_clone);
-                        let _ = tx_lyrics.send(WorkerEvent::LyricsReady {
-                            cache_key: key_clone,
-                            payload,
-                        });
-                    });
+                    spawn_lyrics_fetch(&tx, &polled, !cli.no_cache);
 
                     if let Some(art_url) = polled.art_url.clone() {
                         let tx_cov = tx.clone();
@@ -248,13 +263,22 @@ fn run_live_tui(cli: Cli) -> Result<()> {
                 cover_style,
                 lyric_style,
                 show_text_lyrics,
+                romanize,
+                dynamic_color,
                 hide_hud,
                 offset_ms,
                 manual_scroll,
                 loading_lyrics,
             )?;
         } else {
-            ui.render_waiting(hide_hud, cover_style, lyric_style, show_text_lyrics)?;
+            ui.render_waiting(
+                hide_hud,
+                cover_style,
+                lyric_style,
+                show_text_lyrics,
+                romanize,
+                dynamic_color,
+            )?;
         }
 
         match poll_user_action(Duration::from_millis(33))? {
@@ -281,9 +305,27 @@ fn run_live_tui(cli: Cli) -> Result<()> {
             }
             UserAction::CycleLyricStyle => lyric_style = lyric_style.next(),
             UserAction::ToggleTextLyrics => show_text_lyrics = !show_text_lyrics,
+            UserAction::ToggleRomanize => romanize = !romanize,
+            UserAction::ToggleDynamicTheme => dynamic_color = !dynamic_color,
+            UserAction::RefreshLyrics => {
+                if let Some(track) = &current_track {
+                    loading_lyrics = true;
+                    spawn_lyrics_fetch(&tx, track, false);
+                }
+            }
             UserAction::ToggleHud => hide_hud = !hide_hud,
-            UserAction::OffsetEarlier => offset_ms -= 250,
-            UserAction::OffsetLater => offset_ms += 250,
+            UserAction::OffsetEarlier => {
+                offset_ms -= 250;
+                if !current_key.is_empty() {
+                    save_track_offset(&current_key, offset_ms);
+                }
+            }
+            UserAction::OffsetLater => {
+                offset_ms += 250;
+                if !current_key.is_empty() {
+                    save_track_offset(&current_key, offset_ms);
+                }
+            }
             UserAction::ScrollUp => manual_scroll = manual_scroll.saturating_sub(1),
             UserAction::ScrollDown => manual_scroll = manual_scroll.saturating_add(1),
             UserAction::PlayPause => {

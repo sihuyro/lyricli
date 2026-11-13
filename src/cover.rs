@@ -21,11 +21,27 @@ const BLOCKS_RAMP: &[char] = &[' ', '░', '▒', '▓', '█'];
 const BRAILLE_MAP: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 const BAYER_2X4: [[u8; 2]; 4] = [[20, 136], [194, 78], [50, 165], [224, 107]];
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ThemePalette {
+    pub accent: [u8; 3],
+    pub sung: [u8; 3],
+}
+
+impl Default for ThemePalette {
+    fn default() -> Self {
+        Self {
+            accent: [242, 109, 111],
+            sung: [250, 250, 255],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AsciiCover {
     pub width: u32,
     pub height: u32,
     pub rows: Vec<String>,
+    pub palette: ThemePalette,
 }
 
 pub fn load_and_render_cover(
@@ -72,17 +88,88 @@ pub fn render_cover_image(img: &RgbImage, cols: u32, style: CoverStyle) -> Ascii
     let grid_w = cols.clamp(12, 80);
     // Album covers are 1:1 square; terminal cells are roughly 1:2 width-to-height.
     let grid_h = (grid_w / 2).max(6);
+    let palette = extract_theme_palette(img);
 
-    match style {
+    let rows = match style {
         CoverStyle::Halfblock => render_halfblock(img, grid_w, grid_h),
         CoverStyle::Braille => render_braille(img, grid_w, grid_h),
         CoverStyle::Blocks => render_ramp(img, grid_w, grid_h, BLOCKS_RAMP),
         CoverStyle::Detailed => render_ramp(img, grid_w, grid_h, DETAILED_RAMP),
         CoverStyle::Standard => render_ramp(img, grid_w, grid_h, STANDARD_RAMP),
+    };
+
+    AsciiCover {
+        width: grid_w,
+        height: grid_h,
+        rows,
+        palette,
     }
 }
 
-fn render_halfblock(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
+pub fn extract_theme_palette(img: &RgbImage) -> ThemePalette {
+    let small = image::imageops::resize(img, 24, 24, FilterType::Triangle);
+    let mut buckets = [(0u32, 0u32, 0u32, 0u32); 512];
+
+    for px in small.pixels() {
+        let [r, g, b] = px.0;
+        let max_c = r.max(g).max(b);
+        if max_c < 30 {
+            continue;
+        }
+        let idx = (((r as usize) >> 5) << 6) | (((g as usize) >> 5) << 3) | ((b as usize) >> 5);
+        buckets[idx].0 += 1;
+        buckets[idx].1 += r as u32;
+        buckets[idx].2 += g as u32;
+        buckets[idx].3 += b as u32;
+    }
+
+    let mut best_score = 0u64;
+    let mut best_rgb: Option<[u8; 3]> = None;
+
+    for &(count, sr, sg, sb) in &buckets {
+        if count == 0 {
+            continue;
+        }
+        let r = (sr / count) as u8;
+        let g = (sg / count) as u8;
+        let b = (sb / count) as u8;
+        let max_c = r.max(g).max(b) as u64;
+        let min_c = r.min(g).min(b) as u64;
+        let chroma = max_c - min_c;
+        let score = (count as u64) * (12 + chroma * 4 + max_c / 4);
+        if score > best_score {
+            best_score = score;
+            best_rgb = Some([r, g, b]);
+        }
+    }
+
+    let Some(raw) = best_rgb else {
+        return ThemePalette::default();
+    };
+    let max_c = raw[0].max(raw[1]).max(raw[2]) as u32;
+    let min_c = raw[0].min(raw[1]).min(raw[2]) as u32;
+    if max_c - min_c < 18 {
+        return ThemePalette {
+            accent: [175, 200, 240],
+            sung: [250, 250, 255],
+        };
+    }
+
+    let target = max_c.clamp(195, 248);
+    let accent = [
+        ((raw[0] as u32 * target) / max_c).min(255) as u8,
+        ((raw[1] as u32 * target) / max_c).min(255) as u8,
+        ((raw[2] as u32 * target) / max_c).min(255) as u8,
+    ];
+    let sung = [
+        ((255u32 * 72 + accent[0] as u32 * 28) / 100) as u8,
+        ((255u32 * 72 + accent[1] as u32 * 28) / 100) as u8,
+        ((255u32 * 72 + accent[2] as u32 * 28) / 100) as u8,
+    ];
+    ThemePalette { accent, sung }
+}
+
+fn render_halfblock(img: &RgbImage, grid_w: u32, grid_h: u32) -> Vec<String> {
     let sample_w = grid_w;
     let sample_h = grid_h * 2;
     let resized = image::imageops::resize(img, sample_w, sample_h, FilterType::Lanczos3);
@@ -118,14 +205,10 @@ fn render_halfblock(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
         rows.push(line);
     }
 
-    AsciiCover {
-        width: grid_w,
-        height: grid_h,
-        rows,
-    }
+    rows
 }
 
-fn render_braille(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
+fn render_braille(img: &RgbImage, grid_w: u32, grid_h: u32) -> Vec<String> {
     let sample_w = grid_w * 2;
     let sample_h = grid_h * 4;
     let resized = image::imageops::resize(img, sample_w, sample_h, FilterType::Lanczos3);
@@ -183,14 +266,10 @@ fn render_braille(img: &RgbImage, grid_w: u32, grid_h: u32) -> AsciiCover {
         rows.push(line);
     }
 
-    AsciiCover {
-        width: grid_w,
-        height: grid_h,
-        rows,
-    }
+    rows
 }
 
-fn render_ramp(img: &RgbImage, grid_w: u32, grid_h: u32, ramp: &[char]) -> AsciiCover {
+fn render_ramp(img: &RgbImage, grid_w: u32, grid_h: u32, ramp: &[char]) -> Vec<String> {
     let resized = image::imageops::resize(img, grid_w, grid_h, FilterType::Lanczos3);
     let raw = resized.as_raw();
     let max_idx = ramp.len().saturating_sub(1);
@@ -223,11 +302,7 @@ fn render_ramp(img: &RgbImage, grid_w: u32, grid_h: u32, ramp: &[char]) -> Ascii
         rows.push(line);
     }
 
-    AsciiCover {
-        width: grid_w,
-        height: grid_h,
-        rows,
-    }
+    rows
 }
 
 fn boosted_luma(r: u8, g: u8, b: u8) -> u8 {
