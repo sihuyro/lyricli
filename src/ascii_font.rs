@@ -34,12 +34,11 @@ pub fn render_ascii_lyric(
         };
     }
 
-    let char_stride = match style {
-        LyricArtStyle::Braille => 3,
-        _ => 5,
+    let max_pixel_cols = match style {
+        LyricArtStyle::Braille => max_cols.saturating_mul(2).max(24),
+        _ => max_cols.max(24),
     };
-    let max_chars_per_line = (max_cols / char_stride).max(6);
-    let wrapped_lines = wrap_words(clean, max_chars_per_line, 4);
+    let wrapped_lines = wrap_words(clean, max_pixel_cols, 4);
 
     let total_chars: usize = wrapped_lines.iter().map(|l| l.chars().count()).sum();
     let sung_chars_float = (total_chars as f64) * progress.clamp(0.0, 1.0);
@@ -80,34 +79,57 @@ pub fn render_ascii_lyric(
     }
 }
 
-fn wrap_words(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+fn line_pixel_width(text: &str) -> usize {
+    let mut w = 0usize;
+    for (i, ch) in text.chars().enumerate() {
+        if i > 0 {
+            w += 1;
+        }
+        w += glyph_bitmap(ch).len();
+    }
+    w
+}
+
+fn truncate_to_pixel_width(word: &str, max_px: usize) -> String {
+    let mut out = String::new();
+    let mut w = 0usize;
+    for (i, ch) in word.chars().enumerate() {
+        let step = if i > 0 { 1 } else { 0 } + glyph_bitmap(ch).len();
+        if w + step > max_px && !out.is_empty() {
+            break;
+        }
+        w += step;
+        out.push(ch);
+    }
+    out
+}
+
+fn wrap_words(text: &str, max_pixel_cols: usize, max_lines: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
 
     for word in text.split_whitespace() {
-        let word_len = word.chars().count();
-        let cur_len = current.chars().count();
-
-        if cur_len == 0 {
-            if word_len <= max_chars {
+        if current.is_empty() {
+            if line_pixel_width(word) <= max_pixel_cols {
                 current.push_str(word);
             } else {
-                let truncated: String = word.chars().take(max_chars).collect();
-                current.push_str(&truncated);
+                current.push_str(&truncate_to_pixel_width(word, max_pixel_cols));
             }
-        } else if cur_len + 1 + word_len <= max_chars {
-            current.push(' ');
-            current.push_str(word);
         } else {
-            lines.push(current);
-            if lines.len() >= max_lines {
-                return lines;
-            }
-            current = if word_len <= max_chars {
-                word.to_string()
+            let candidate = format!("{current} {word}");
+            if line_pixel_width(&candidate) <= max_pixel_cols {
+                current = candidate;
             } else {
-                word.chars().take(max_chars).collect()
-            };
+                lines.push(current);
+                if lines.len() >= max_lines {
+                    return lines;
+                }
+                current = if line_pixel_width(word) <= max_pixel_cols {
+                    word.to_string()
+                } else {
+                    truncate_to_pixel_width(word, max_pixel_cols)
+                };
+            }
         }
     }
 
@@ -257,74 +279,73 @@ fn render_line_braille(line: &str, progress: f64) -> (Vec<String>, usize) {
 }
 
 fn build_bitmap_columns(line: &str) -> Vec<u8> {
-    let mut cols = Vec::with_capacity(line.chars().count() * 5);
+    let mut cols = Vec::with_capacity(line.chars().count() * 6);
     for (i, ch) in line.chars().enumerate() {
         if i > 0 {
             cols.push(0);
         }
-        let glyph = glyph_4x6(ch);
-        cols.extend_from_slice(&glyph);
+        cols.extend_from_slice(glyph_bitmap(ch));
     }
     cols
 }
 
-// Each glyph is 4 columns wide; each column byte holds 6 vertical bits (bit 5 = top row, bit 0 = bottom row).
-fn glyph_4x6(ch: char) -> [u8; 4] {
+// Variable-width 6-row bitmaps (bit 5 = top row, bit 0 = bottom row/descender).
+fn glyph_bitmap(ch: char) -> &'static [u8] {
     match ch.to_ascii_uppercase() {
-        'A' => [0b011110, 0b100100, 0b100100, 0b011110],
-        'B' => [0b111110, 0b101010, 0b101010, 0b010100],
-        'C' => [0b011100, 0b100010, 0b100010, 0b010100],
-        'D' => [0b111110, 0b100010, 0b100010, 0b011100],
-        'E' => [0b111110, 0b101010, 0b101010, 0b100010],
-        'F' => [0b111110, 0b101000, 0b101000, 0b100000],
-        'G' => [0b011100, 0b100010, 0b101010, 0b011100],
-        'H' => [0b111110, 0b001000, 0b001000, 0b111110],
-        'I' => [0b100010, 0b111110, 0b100010, 0b000000],
-        'J' => [0b000100, 0b000010, 0b100010, 0b011100],
-        'K' => [0b111110, 0b001000, 0b010100, 0b100010],
-        'L' => [0b111110, 0b000010, 0b000010, 0b000010],
-        'M' => [0b111110, 0b010000, 0b010000, 0b111110],
-        'N' => [0b111110, 0b010000, 0b001100, 0b111110],
-        'O' => [0b011100, 0b100010, 0b100010, 0b011100],
-        'P' => [0b111110, 0b100100, 0b100100, 0b011000],
-        'Q' => [0b011100, 0b100010, 0b100110, 0b011101],
-        'R' => [0b111110, 0b100100, 0b101100, 0b010010],
-        'S' => [0b010010, 0b101010, 0b101010, 0b010100],
-        'T' => [0b100000, 0b111110, 0b100000, 0b100000],
-        'U' => [0b111100, 0b000010, 0b000010, 0b111100],
-        'V' => [0b111000, 0b000110, 0b000110, 0b111000],
-        'W' => [0b111110, 0b000100, 0b000100, 0b111110],
-        'X' => [0b110010, 0b001100, 0b001100, 0b110010],
-        'Y' => [0b110000, 0b001110, 0b001110, 0b110000],
-        'Z' => [0b100010, 0b100110, 0b101010, 0b110010],
-        '0' => [0b011100, 0b100110, 0b110010, 0b011100],
-        '1' => [0b010010, 0b111110, 0b000010, 0b000000],
-        '2' => [0b010010, 0b100110, 0b101010, 0b010010],
-        '3' => [0b100010, 0b101010, 0b101010, 0b010100],
-        '4' => [0b001100, 0b010100, 0b111110, 0b000100],
-        '5' => [0b111010, 0b101010, 0b101010, 0b100100],
-        '6' => [0b011100, 0b101010, 0b101010, 0b000100],
-        '7' => [0b100000, 0b100110, 0b101000, 0b110000],
-        '8' => [0b010100, 0b101010, 0b101010, 0b010100],
-        '9' => [0b010000, 0b101010, 0b101010, 0b011100],
-        '\'' | '’' | '`' => [0b000000, 0b110000, 0b000000, 0b000000],
-        '"' | '“' | '”' => [0b110000, 0b000000, 0b110000, 0b000000],
-        ',' => [0b000000, 0b000011, 0b000010, 0b000000],
-        '.' => [0b000000, 0b000010, 0b000000, 0b000000],
-        '!' => [0b000000, 0b111010, 0b000000, 0b000000],
-        '?' => [0b010000, 0b100110, 0b101000, 0b010000],
-        '-' | '\u{2014}' | '\u{2013}' => [0b001000, 0b001000, 0b001000, 0b000000],
-        ':' => [0b000000, 0b010010, 0b000000, 0b000000],
-        '(' | '（' => [0b000000, 0b011100, 0b100010, 0b000000],
-        ')' | '）' => [0b000000, 0b100010, 0b011100, 0b000000],
-        '$' => [0b010010, 0b111111, 0b101010, 0b010100],
-        '&' => [0b010100, 0b101010, 0b010100, 0b001010],
-        '/' => [0b000010, 0b000100, 0b001000, 0b010000],
-        '+' => [0b001000, 0b011100, 0b001000, 0b000000],
-        '*' => [0b010100, 0b001000, 0b010100, 0b000000],
-        '♪' => [0b000110, 0b011110, 0b010000, 0b011100],
-        ' ' => [0b000000, 0b000000, 0b000000, 0b000000],
-        _ => [0b000000, 0b001100, 0b001100, 0b000000],
+        'A' => &[0b011110, 0b100100, 0b100100, 0b011110],
+        'B' => &[0b111110, 0b101010, 0b101010, 0b010100],
+        'C' => &[0b011100, 0b100010, 0b100010, 0b100010],
+        'D' => &[0b111110, 0b100010, 0b100010, 0b011100],
+        'E' => &[0b111110, 0b101010, 0b101010, 0b100010],
+        'F' => &[0b111110, 0b101000, 0b101000, 0b100000],
+        'G' => &[0b011100, 0b100010, 0b101010, 0b101110],
+        'H' => &[0b111110, 0b001000, 0b001000, 0b111110],
+        'I' => &[0b100010, 0b111110, 0b100010],
+        'J' => &[0b000100, 0b000010, 0b100010, 0b111100],
+        'K' => &[0b111110, 0b001000, 0b010100, 0b100010],
+        'L' => &[0b111110, 0b000010, 0b000010, 0b000010],
+        'M' => &[0b111110, 0b010000, 0b001000, 0b010000, 0b111110],
+        'N' => &[0b111110, 0b010000, 0b001000, 0b000100, 0b111110],
+        'O' => &[0b011100, 0b100010, 0b100010, 0b011100],
+        'P' => &[0b111110, 0b100100, 0b100100, 0b011000],
+        'Q' => &[0b011100, 0b100010, 0b100110, 0b011101],
+        'R' => &[0b111110, 0b100100, 0b101100, 0b010010],
+        'S' => &[0b010010, 0b101010, 0b101010, 0b100100],
+        'T' => &[0b100000, 0b100000, 0b111110, 0b100000, 0b100000],
+        'U' => &[0b111100, 0b000010, 0b000010, 0b111100],
+        'V' => &[0b111000, 0b000100, 0b000010, 0b000100, 0b111000],
+        'W' => &[0b111100, 0b000010, 0b001100, 0b000010, 0b111100],
+        'X' => &[0b110110, 0b001000, 0b001000, 0b110110],
+        'Y' => &[0b110000, 0b001000, 0b000110, 0b001000, 0b110000],
+        'Z' => &[0b100010, 0b100110, 0b101010, 0b110010],
+        '0' => &[0b011100, 0b100110, 0b110010, 0b011100],
+        '1' => &[0b010010, 0b111110, 0b000010],
+        '2' => &[0b010010, 0b100110, 0b101010, 0b010010],
+        '3' => &[0b100010, 0b101010, 0b101010, 0b010100],
+        '4' => &[0b001100, 0b010100, 0b111110, 0b000100],
+        '5' => &[0b111010, 0b101010, 0b101010, 0b100100],
+        '6' => &[0b011100, 0b101010, 0b101010, 0b000100],
+        '7' => &[0b100000, 0b100110, 0b101000, 0b110000],
+        '8' => &[0b010100, 0b101010, 0b101010, 0b010100],
+        '9' => &[0b010000, 0b101010, 0b101010, 0b011100],
+        '\'' | '’' | '`' => &[0b110000],
+        '"' | '“' | '”' => &[0b110000, 0b000000, 0b110000],
+        ',' => &[0b000011, 0b000010],
+        '.' => &[0b000010],
+        '!' => &[0b111010],
+        '?' => &[0b010000, 0b100110, 0b101000, 0b010000],
+        '-' | '\u{2014}' | '\u{2013}' => &[0b001000, 0b001000, 0b001000],
+        ':' => &[0b010010],
+        '(' | '（' => &[0b011100, 0b100010],
+        ')' | '）' => &[0b100010, 0b011100],
+        '$' => &[0b010010, 0b111111, 0b101010, 0b010100],
+        '&' => &[0b010100, 0b101010, 0b010100, 0b001010],
+        '/' => &[0b000010, 0b000100, 0b001000, 0b010000],
+        '+' => &[0b001000, 0b011100, 0b001000],
+        '*' => &[0b010100, 0b001000, 0b010100],
+        '♪' => &[0b000110, 0b011110, 0b010000, 0b011100],
+        ' ' => &[0b000000, 0b000000, 0b000000],
+        _ => &[0b001100, 0b001100],
     }
 }
 
